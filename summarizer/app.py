@@ -74,16 +74,14 @@ with tab_url:
         if not url.strip():
             st.error("Por favor, introduce una URL válida.")
         else:
-            with st.spinner("Descargando y extrayendo el contenido del artículo..."):
-                try:
+            article_text = None
+            try:
+                with st.spinner("Descargando y extrayendo el contenido del artículo..."):
                     article_text = fetch_article_text_from_url(url)
-                except Exception as e:
-                    st.error(f"No se ha podido obtener el artículo: {e}")
-                    article_text = ""
+            except Exception as e:
+                st.error(f"No se ha podido obtener el artículo: {e}")
 
-            if not article_text.strip():
-                st.error("No se ha podido extraer texto del artículo.")
-            else:
+            if article_text:
                 st.success("Texto del artículo obtenido. Generando resumen...")
                 with st.spinner("Llamando a OpenAI para generar el resumen en español..."):
                     try:
@@ -103,6 +101,7 @@ with tab_url:
 
                     except Exception as e:
                         st.error(f"Error generando el resumen: {e}")
+
 
 
 # --------- HISTORY TAB ---------
