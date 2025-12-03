@@ -5,48 +5,117 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
+DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+}
+
+
+def _normalize_url(url: str) -> str:
+    url = url.strip()
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+    return url
+
+
+def _clean_spaces(text: str) -> str:
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _extract_generic_main_text(soup: BeautifulSoup) -> str:
+    """
+    Generic extractor for normal news/blog sites.
+    Try article/content containers, then fallback to body text.
+    """
+    # Remove scripts/styles
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+
+    # 1) <article>
+    article = soup.find("article")
+    if article:
+        t = article.get_text(" ", strip=True)
+        if len(t.split()) > 30:
+            return _clean_spaces(t)
+
+    # 2) Common content divs
+    for cls in [
+        "entry-content",
+        "post-content",
+        "single-content",
+        "td-post-content",
+        "elementor-widget-theme-post-content",
+        "content",
+    ]:
+        div = soup.find("div", class_=lambda c: c and cls in c)
+        if div:
+            t = div.get_text(" ", strip=True)
+            if len(t.split()) > 30:
+                return _clean_spaces(t)
+
+    # 3) Fallback: whole body
+    body = soup.body or soup
+    t = body.get_text(" ", strip=True)
+    return _clean_spaces(t)
+
+
+def _extract_deanna_text(soup: BeautifulSoup) -> str:
+    """
+    Extremely simple extractor for deanna.today:
+    just take ALL visible text in <body>.
+    Noise is fine; GPT will summarise it.
+    """
+    body = soup.body or soup
+
+    # Don't strip header/footer/nav here; keep everything to be safe
+    for tag in body(["script", "style", "noscript"]):
+        tag.decompose()
+
+    text = body.get_text(" ", strip=True)
+    return _clean_spaces(text)
+
 
 def fetch_article_text_from_url(url: str, timeout: int = 10) -> str:
     """
-    Fetches and roughly extracts main text content from a webpage.
+    Fetch and extract article text from a URL.
 
-    This is a simple heuristic approach (not a full article parser).
-    For many news sites / blogs it will work decently.
-
-    Parameters
-    ----------
-    url : str
-        URL of the article.
-    timeout : int
-        Request timeout in seconds.
-
-    Returns
-    -------
-    str
-        Extracted visible text.
+    - For deanna.today: use very permissive extraction (whole body text).
+    - For other sites: use a more targeted generic extractor.
     """
-    if not url.startswith("http://") and not url.startswith("https://"):
-        url = "https://" + url
+    url = _normalize_url(url)
 
-    resp = requests.get(url, timeout=timeout)
-    resp.raise_for_status()
+    headers = DEFAULT_HEADERS.copy()
+    if "deanna.today" in url:
+        headers.update(
+            {
+                "Referer": "https://deanna.today/",
+                "Upgrade-Insecure-Requests": "1",
+            }
+        )
+
+    resp = requests.get(url, headers=headers, timeout=timeout)
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"El sitio respondió con código HTTP {resp.status_code}.")
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # Remove script / style elements
-    for tag in soup(["script", "style", "noscript"]):
-        tag.extract()
-
-    # Try to focus on <article> if present
-    article_tag = soup.find("article")
-    if article_tag:
-        text = article_tag.get_text(separator=" ", strip=True)
+    if "deanna.today" in url:
+        text = _extract_deanna_text(soup)
     else:
-        # Fallback: use body text
-        body = soup.body or soup
-        text = body.get_text(separator=" ", strip=True)
+        text = _extract_generic_main_text(soup)
 
-    # Simple cleanup: collapse multiple spaces
-    text = re.sub(r"\s+", " ", text)
+    if not text:
+        raise RuntimeError(
+            "Se obtuvo la página pero no se ha encontrado ningún texto."
+        )
 
+    # ⚠️ IMPORTANT: no minimum length check here for deanna.today.
+    # Even if it’s noisy/short, let GPT handle it.
     return text
