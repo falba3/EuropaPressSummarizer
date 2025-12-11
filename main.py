@@ -128,11 +128,13 @@ async def analyze_url(req: AnalyzeUrlRequest):
     html = resp.text
     article_text = extract_text_from_html(html)
 
-    if not article_text or len(article_text) < 50:
+    # Only fail if we literally got nothing at all
+    if not article_text:
         raise HTTPException(
-            status_code=502,
-            detail="No se ha podido extraer texto suficiente del artículo",
+            status_code=500,
+            detail="No se ha podido extraer texto del artículo",
         )
+
 
     try:
         topics = summarize_spanish_article(article_text)
