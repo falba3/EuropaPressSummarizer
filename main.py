@@ -42,6 +42,18 @@ class AnalyzeResponse(BaseModel):
 async def health():
     return {"status": "ok"}
 
+@app.get("/db_ping")
+async def db_ping():
+    from ministore_creator import get_db
+    db = get_db()
+    try:
+        rows = db.execute_query("SELECT 1 as ok")
+        return {"ok": True, "rows": rows}
+    finally:
+        try: db.disconnect()
+        except: pass
+
+
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest):
