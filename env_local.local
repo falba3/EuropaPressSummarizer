@@ -1,0 +1,5 @@
+# DATABASE
+DB_HOST=snaps2u.cniamgkwcmgr.us-east-1.rds.amazonaws.com
+DB_USERNAME=u_snaps2u
+DB_PASSWORD=KM9k6tXhx68BBZnnrmEqTG
+DB_DATABASE=snaps2u

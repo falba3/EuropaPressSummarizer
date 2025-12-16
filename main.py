@@ -11,8 +11,10 @@ from dotenv import load_dotenv
 from summarizer import (
     summarize_spanish_article,
     create_deanna_ministore,
-    summarize_article_overall,   # ✅ NEW
+    summarize_article_overall,
 )
+
+from ministore_creator import get_db, create_ministore_in_db
 
 load_dotenv()
 
@@ -31,7 +33,7 @@ class AnalyzeUrlRequest(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
-    summary: str                 # ✅ NEW
+    summary: str
     topics: List[str]
     ministores: List[str]
 
@@ -44,21 +46,40 @@ async def health():
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest):
     """
-    Given article text, return summary + two commercial topics and their ministore URLs.
+    Given article text:
+    - overall Spanish summary
+    - extract 2 commercial topics
+    - return deanna2u URLs (same as before)
+    - ALSO create ministores + store items/mappings in MySQL (side effect)
     """
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="Empty text")
 
     try:
-        # ✅ NEW: overall summary (does not change topic logic)
         summary = summarize_article_overall(req.text)
 
-        # existing logic unchanged
         topics = summarize_spanish_article(req.text)
-        if not topics or len(topics) == 0:
+        if not topics:
             raise HTTPException(status_code=500, detail="No topics extracted")
 
         ministores = [create_deanna_ministore(t) for t in topics]
+
+        # Side-effect: create/store ministores in DB
+        db = get_db()
+        try:
+            for t in topics:
+                create_ministore_in_db(
+                    db=db,
+                    topic=t,
+                    language="es",
+                    num_results=10,
+                    items_to_link=8,
+                )
+        finally:
+            try:
+                db.disconnect()
+            except Exception:
+                pass
 
         return AnalyzeResponse(summary=summary, topics=topics, ministores=ministores)
 
@@ -70,8 +91,8 @@ async def analyze(req: AnalyzeRequest):
 
 def extract_text_from_html(html: str) -> str:
     """
-    Extract main article text from full HTML.
-    - Prefer article > p
+    Streamlit-matching extraction:
+    - Prefer <article> p
     - Fallback to all <p>
     - Fallback to all text
     """
@@ -105,7 +126,13 @@ def extract_text_from_html(html: str) -> str:
 @app.post("/analyze_url", response_model=AnalyzeResponse)
 async def analyze_url(req: AnalyzeUrlRequest):
     """
-    Given an article URL, fetch HTML, extract text, return summary + topics + ministores.
+    Given an article URL:
+    - fetch HTML
+    - extract text
+    - overall Spanish summary
+    - extract 2 commercial topics
+    - return deanna2u URLs
+    - ALSO create ministores + store items/mappings in MySQL (side effect)
     """
     url = req.url.strip()
     if not url:
@@ -129,22 +156,35 @@ async def analyze_url(req: AnalyzeUrlRequest):
             detail=f"Error fetching URL, HTTP {resp.status_code}",
         )
 
-    html = resp.text
-    article_text = extract_text_from_html(html)
-
+    article_text = extract_text_from_html(resp.text)
     if not article_text:
         raise HTTPException(status_code=500, detail="No se ha podido extraer texto del artículo")
 
     try:
-        # ✅ NEW
         summary = summarize_article_overall(article_text)
 
-        # existing logic unchanged
         topics = summarize_spanish_article(article_text)
-        if not topics or len(topics) == 0:
+        if not topics:
             raise HTTPException(status_code=500, detail="No topics extracted")
 
         ministores = [create_deanna_ministore(t) for t in topics]
+
+        # Side-effect: create/store ministores in DB
+        db = get_db()
+        try:
+            for t in topics:
+                create_ministore_in_db(
+                    db=db,
+                    topic=t,
+                    language="es",
+                    num_results=10,
+                    items_to_link=8,
+                )
+        finally:
+            try:
+                db.disconnect()
+            except Exception:
+                pass
 
         return AnalyzeResponse(summary=summary, topics=topics, ministores=ministores)
 
