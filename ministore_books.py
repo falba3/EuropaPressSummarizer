@@ -45,6 +45,8 @@ def create_book_from_topic(
     slug = f"{slug_prefix}-{slug_ts}"
     name = f"{topic} - {fecha_str_day}"
     description = f"Ministore auto-generado para: {topic}"
+    
+    EMPTY_DOCTRINE_ARRAY = "a:0:{}"
 
     book_data = {
         "user_id": int(user_id),                 # ✅ 221
@@ -65,7 +67,7 @@ def create_book_from_topic(
         "coverHexColor": "",
         "numLikers": 0,
         "description": description,
-        "tags": "",
+        "tags": EMPTY_DOCTRINE_ARRAY,
         "thumbnailImage": "",
         "numClips": 0,
         "numViews": 0,
@@ -73,8 +75,8 @@ def create_book_from_topic(
         "embed_code": "",
         "thumbnailImageSmall": "",
         "humanModified": created_ts,
-        "coverV3": "",
-        "typeFilters": "",
+        "coverV3": EMPTY_DOCTRINE_ARRAY,
+        "typeFilters": EMPTY_DOCTRINE_ARRAY,
     }
 
     book_id = db.create_book(book_data)
