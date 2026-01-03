@@ -10,16 +10,22 @@ from dotenv import load_dotenv
 
 from summarizer import (
     summarize_article_overall,
-    summarize_commercial_topics,
+    summarize_spanish_article_multi,  # 3 topics
 )
 
-from ministore_books import create_three_books_for_topics
+from deanna2u_books import create_deanna2u_book
 
 load_dotenv()
 
 if not os.getenv("OPENAI_API_KEY"):
     raise RuntimeError("OPENAI_API_KEY is not set")
 
+# Deanna2u API key required for ministore creation
+if not os.getenv("DEANNA2U_API_KEY"):
+    raise RuntimeError("DEANNA2U_API_KEY is not set")
+
+# Force user_id=221 per your requirement
+DEANNA2U_USER_ID = 221
 
 app = FastAPI(title="Deanna Summarizer API")
 
@@ -35,7 +41,7 @@ class AnalyzeUrlRequest(BaseModel):
 class AnalyzeResponse(BaseModel):
     summary: str
     topics: List[str]
-    ministores: List[str]  # 3 URLs
+    ministores: List[str]  # book_url(s) returned by Deanna2u API
 
 
 @app.get("/health")
@@ -43,14 +49,42 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/")
-async def root():
-    return {"message": "Deanna Summarizer API. Use /health, /analyze, /analyze_url"}
+@app.post("/analyze", response_model=AnalyzeResponse)
+async def analyze(req: AnalyzeRequest):
+    """
+    Input: article text
+    Output:
+      - overall summary
+      - 3 commercial topics
+      - 3 Deanna2u book URLs (created via Deanna2u API)
+    """
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text")
+
+    try:
+        summary = summarize_article_overall(text)
+
+        topics = summarize_spanish_article_multi(text, n=3)
+        if not topics or len(topics) < 3:
+            raise HTTPException(status_code=500, detail="Failed to extract 3 topics")
+
+        ministores: List[str] = []
+        for term in topics:
+            book_url = create_deanna2u_book(term=term, user_id=DEANNA2U_USER_ID)
+            ministores.append(book_url)
+
+        return AnalyzeResponse(summary=summary, topics=topics, ministores=ministores)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def extract_text_from_html(html: str) -> str:
     """
-    Extract main article text from full HTML:
+    Extract main article text:
     - Prefer <article> p
     - Fallback to all <p>
     - Fallback to all text
@@ -78,59 +112,17 @@ def extract_text_from_html(html: str) -> str:
     text = " ".join(text.split())
     if len(text) > 15000:
         text = text[:15000]
-
     return text
-
-
-@app.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(req: AnalyzeRequest):
-    """
-    Given article text:
-    1) overall summary
-    2) generate 3 commercial topics
-    3) create 3 REAL Deanna2u books (user_id=221), one per topic
-    4) return summary + topics + 3 book URLs
-    """
-    if not req.text or not req.text.strip():
-        raise HTTPException(status_code=400, detail="Empty text")
-
-    try:
-        article_text = req.text.strip()
-
-        summary = summarize_article_overall(article_text)
-        topics = summarize_commercial_topics(article_text, n=3)
-
-        if not topics or len(topics) != 3:
-            raise HTTPException(status_code=500, detail="Failed to extract exactly 3 topics")
-
-        ministore_urls = create_three_books_for_topics(
-            topics=topics,
-            user_id=221,
-            category_id=1,
-            language="es",
-            base_book_url="https://www.deanna2u.com/book",
-            items_per_book=4,   # adjust if you want 6/8 etc.
-            serper_num_results=10,
-        )
-
-        if not ministore_urls or len(ministore_urls) != 3:
-            raise HTTPException(status_code=500, detail="Failed to create 3 ministores")
-
-        return AnalyzeResponse(summary=summary, topics=topics, ministores=ministore_urls)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/analyze_url", response_model=AnalyzeResponse)
 async def analyze_url(req: AnalyzeUrlRequest):
     """
-    Given URL:
-    - fetch HTML
-    - extract text
-    - do same pipeline as /analyze
+    Input: article URL
+    Output:
+      - overall summary
+      - 3 commercial topics
+      - 3 Deanna2u book URLs (created via Deanna2u API)
     """
     url = (req.url or "").strip()
     if not url:
@@ -139,7 +131,7 @@ async def analyze_url(req: AnalyzeUrlRequest):
     try:
         resp = requests.get(
             url,
-            timeout=20,
+            timeout=15,
             headers={
                 "User-Agent": "Mozilla/5.0 (compatible; DeannaSummarizerBot/1.0)",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -157,25 +149,17 @@ async def analyze_url(req: AnalyzeUrlRequest):
 
     try:
         summary = summarize_article_overall(article_text)
-        topics = summarize_commercial_topics(article_text, n=3)
 
-        if not topics or len(topics) != 3:
-            raise HTTPException(status_code=500, detail="Failed to extract exactly 3 topics")
+        topics = summarize_spanish_article_multi(article_text, n=3)
+        if not topics or len(topics) < 3:
+            raise HTTPException(status_code=500, detail="Failed to extract 3 topics")
 
-        ministore_urls = create_three_books_for_topics(
-            topics=topics,
-            user_id=221,
-            category_id=1,
-            language="es",
-            base_book_url="https://www.deanna2u.com/book",
-            items_per_book=4,
-            serper_num_results=10,
-        )
+        ministores: List[str] = []
+        for term in topics:
+            book_url = create_deanna2u_book(term=term, user_id=DEANNA2U_USER_ID)
+            ministores.append(book_url)
 
-        if not ministore_urls or len(ministore_urls) != 3:
-            raise HTTPException(status_code=500, detail="Failed to create 3 ministores")
-
-        return AnalyzeResponse(summary=summary, topics=topics, ministores=ministore_urls)
+        return AnalyzeResponse(summary=summary, topics=topics, ministores=ministores)
 
     except HTTPException:
         raise

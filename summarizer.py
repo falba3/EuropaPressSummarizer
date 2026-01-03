@@ -15,24 +15,24 @@ def summarize_article_overall(
     model: str = "gpt-4o-mini",
 ) -> str:
     """
-    Short overall summary of the article in Spanish, 2–3 sentences.
+    Short overall summary (Spanish), 2–3 sentences.
     """
     if not article_text or not article_text.strip():
         raise ValueError("El texto del artículo está vacío.")
 
-    trimmed = article_text.strip()
-    if len(trimmed) > 15000:
-        trimmed = trimmed[:15000]
+    trimmed_text = article_text.strip()
+    if len(trimmed_text) > 15000:
+        trimmed_text = trimmed_text[:15000]
 
     messages = [
         {
             "role": "system",
             "content": (
-                "Eres un periodista. Resume el artículo de forma clara y neutral. "
+                "Eres un periodista. Resume el artículo de forma clara y neutral.\n"
                 "Devuelve SOLO el resumen en español, en 2-3 frases, sin títulos, sin viñetas."
             ),
         },
-        {"role": "user", "content": f"ARTÍCULO:\n{trimmed}"},
+        {"role": "user", "content": f"ARTÍCULO:\n{trimmed_text}"},
     ]
 
     response = client.chat.completions.create(
@@ -42,30 +42,28 @@ def summarize_article_overall(
     )
 
     summary = response.choices[0].message.content.strip()
-    if len(summary) > 600:
-        summary = summary[:600].rstrip() + "…"
+    if len(summary) > 500:
+        summary = summary[:500].rstrip() + "…"
     return summary
 
 
-def summarize_commercial_topics(
+def summarize_spanish_article_multi(
     article_text: str,
     n: int = 3,
     model: str = "gpt-4o-mini",
-    max_chars: Optional[int] = None,
 ) -> List[str]:
     """
-    Extract N commercial/ad-friendly search topics from the article.
-    - Each topic max 5 words
-    - EXACTLY N lines returned
+    Extract N commercial/ad-friendly search topics (max 5 words each).
+    Returns exactly N lines.
     """
     if not article_text or not article_text.strip():
         raise ValueError("El texto del artículo está vacío.")
     if n < 1:
         raise ValueError("n must be >= 1")
 
-    trimmed = article_text.strip()
-    if len(trimmed) > 15000:
-        trimmed = trimmed[:15000]
+    trimmed_text = article_text.strip()
+    if len(trimmed_text) > 15000:
+        trimmed_text = trimmed_text[:15000]
 
     messages = [
         {
@@ -73,22 +71,19 @@ def summarize_commercial_topics(
             "content": (
                 "Eres un experto en marketing digital especializado en identificar oportunidades "
                 "comerciales y publicitarias en artículos periodísticos.\n\n"
-                f"Tu objetivo es extraer {n} búsquedas comerciales del artículo.\n\n"
-                "FORMATO DE RESPUESTA:\n"
-                f"- Devuelve EXACTAMENTE {n} líneas.\n"
-                "- Una búsqueda por línea.\n"
-                "- Sin numeración, sin viñetas, sin explicaciones.\n"
-                "- Cada búsqueda debe tener MÁXIMO 5 palabras.\n"
-                "- Deben ser específicas, comerciales y útiles para anuncios.\n"
-                "- Deben ser distintas entre sí.\n"
+                f"Devuelve EXACTAMENTE {n} búsquedas comerciales, una por línea, sin numeración ni viñetas.\n"
+                "Cada búsqueda debe tener MÁXIMO 5 palabras.\n"
+                "Deben ser específicas, útiles y distintas entre sí.\n"
+                "Piensa en productos, servicios, lugares o actividades mencionadas en el artículo.\n"
             ),
         },
         {
             "role": "user",
             "content": (
-                f"Analiza el siguiente artículo y devuelve EXACTAMENTE {n} búsquedas comerciales.\n\n"
+                f"Devuelve EXACTAMENTE {n} líneas.\n"
+                "Sin explicaciones.\n\n"
                 "ARTÍCULO:\n"
-                f"{trimmed}"
+                f"{trimmed_text}"
             ),
         },
     ]
@@ -100,24 +95,24 @@ def summarize_commercial_topics(
     )
 
     raw = response.choices[0].message.content.strip()
-
     topics = [ln.strip() for ln in raw.split("\n") if ln.strip()]
-    topics = [re.sub(r"^\d+[\.\)]\s*", "", t) for t in topics]  # strip numbering
 
-    # enforce max 5 words each
+    # remove numbering just in case
+    topics = [re.sub(r"^\d+[\.\)]\s*", "", t) for t in topics]
+
+    # enforce <= 5 words
     cleaned = []
     for t in topics:
         words = t.split()
         if len(words) > 5:
             t = " ".join(words[:5])
-        cleaned.append(t.strip())
+        cleaned.append(t)
 
     # ensure exactly n
     if len(cleaned) < n:
-        # pad by repeating last valid one (better than failing)
+        # pad with last item or generic fallback
         if cleaned:
-            while len(cleaned) < n:
-                cleaned.append(cleaned[-1])
+            cleaned += [cleaned[-1]] * (n - len(cleaned))
         else:
             cleaned = ["productos relacionados"] * n
     elif len(cleaned) > n:
@@ -126,6 +121,11 @@ def summarize_commercial_topics(
     return cleaned
 
 
-# Backwards-compatible: your previous function name still works (returns 2)
-def summarize_spanish_article(article_text: str, model: str = "gpt-4o-mini", max_chars: Optional[int] = None) -> List[str]:
-    return summarize_commercial_topics(article_text, n=2, model=model, max_chars=max_chars)
+# Backwards-compatible function name if you still import this elsewhere
+def summarize_spanish_article(
+    article_text: str,
+    model: str = "gpt-4o-mini",
+    max_chars: Optional[int] = 5000,
+) -> List[str]:
+    # Keeps old behavior: exactly 2 topics
+    return summarize_spanish_article_multi(article_text, n=2, model=model)
