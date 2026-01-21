@@ -1,6 +1,6 @@
 # main.py
 import os
-from typing import List
+from typing import List, Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -10,26 +10,27 @@ from dotenv import load_dotenv
 
 from summarizer import (
     summarize_article_overall,
-    summarize_spanish_article_multi,  # 3 topics
+    summarize_spanish_article_multi,
 )
 
-from deanna2u_books import create_deanna2u_book
+from deanna2u_books import create_deanna2u_book, resolve_book_id_from_book_url
 
 load_dotenv()
 
 if not os.getenv("OPENAI_API_KEY"):
     raise RuntimeError("OPENAI_API_KEY is not set")
 
-# Deanna2u API key required for ministore creation
 if not os.getenv("DEANNA2U_API_KEY"):
     raise RuntimeError("DEANNA2U_API_KEY is not set")
 
-# Force user_id=221 per your requirement
-DEANNA2U_USER_ID = 221
+DEANNA2U_USER_ID = 221  # forced per requirement
 
 app = FastAPI(title="Deanna Summarizer API")
 
 
+# ----------------------------
+# Models
+# ----------------------------
 class AnalyzeRequest(BaseModel):
     text: str
 
@@ -38,50 +39,31 @@ class AnalyzeUrlRequest(BaseModel):
     url: str
 
 
-class AnalyzeResponse(BaseModel):
+class SummarizeResponse(BaseModel):
     summary: str
+    topics: List[str]  # 3 topics
+
+
+class CreateMinistoresRequest(BaseModel):
     topics: List[str]
-    ministores: List[str]  # book_url(s) returned by Deanna2u API
 
 
+class CreateMinistoresResponse(BaseModel):
+    book_urls: List[str]
+    book_ids: List[int]
+
+
+# ----------------------------
+# Health
+# ----------------------------
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
-@app.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(req: AnalyzeRequest):
-    """
-    Input: article text
-    Output:
-      - overall summary
-      - 3 commercial topics
-      - 3 Deanna2u book URLs (created via Deanna2u API)
-    """
-    text = (req.text or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="Empty text")
-
-    try:
-        summary = summarize_article_overall(text)
-
-        topics = summarize_spanish_article_multi(text, n=3)
-        if not topics or len(topics) < 3:
-            raise HTTPException(status_code=500, detail="Failed to extract 3 topics")
-
-        ministores: List[str] = []
-        for term in topics:
-            book_url = create_deanna2u_book(term=term, user_id=DEANNA2U_USER_ID)
-            ministores.append(book_url)
-
-        return AnalyzeResponse(summary=summary, topics=topics, ministores=ministores)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
+# ----------------------------
+# Helpers
+# ----------------------------
 def extract_text_from_html(html: str) -> str:
     """
     Extract main article text:
@@ -115,15 +97,43 @@ def extract_text_from_html(html: str) -> str:
     return text
 
 
-@app.post("/analyze_url", response_model=AnalyzeResponse)
-async def analyze_url(req: AnalyzeUrlRequest):
+def _create_book_and_resolve_id(term: str) -> Tuple[str, int]:
     """
-    Input: article URL
-    Output:
-      - overall summary
-      - 3 commercial topics
-      - 3 Deanna2u book URLs (created via Deanna2u API)
+    Calls Deanna2u create_new_book API, then resolves cliperest_book.id from the returned book_url slug
+    so WP can build widget iframes that require book IDs.
     """
+    book_url = create_deanna2u_book(term=term, user_id=DEANNA2U_USER_ID)
+    book_id = resolve_book_id_from_book_url(book_url)
+    return book_url, book_id
+
+
+# ----------------------------
+# Endpoint 1: Summarize + Topics
+# ----------------------------
+@app.post("/summarize", response_model=SummarizeResponse)
+async def summarize(req: AnalyzeRequest):
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text")
+
+    try:
+        summary = summarize_article_overall(text)
+        topics = summarize_spanish_article_multi(text, n=3)
+        topics = [t.strip() for t in topics if t and t.strip()][:3]
+
+        if len(topics) < 3:
+            raise HTTPException(status_code=500, detail="Failed to extract 3 topics")
+
+        return SummarizeResponse(summary=summary, topics=topics)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/summarize_url", response_model=SummarizeResponse)
+async def summarize_url(req: AnalyzeUrlRequest):
     url = (req.url or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="Empty URL")
@@ -149,17 +159,41 @@ async def analyze_url(req: AnalyzeUrlRequest):
 
     try:
         summary = summarize_article_overall(article_text)
-
         topics = summarize_spanish_article_multi(article_text, n=3)
-        if not topics or len(topics) < 3:
+        topics = [t.strip() for t in topics if t and t.strip()][:3]
+
+        if len(topics) < 3:
             raise HTTPException(status_code=500, detail="Failed to extract 3 topics")
 
-        ministores: List[str] = []
-        for term in topics:
-            book_url = create_deanna2u_book(term=term, user_id=DEANNA2U_USER_ID)
-            ministores.append(book_url)
+        return SummarizeResponse(summary=summary, topics=topics)
 
-        return AnalyzeResponse(summary=summary, topics=topics, ministores=ministores)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ----------------------------
+# Endpoint 2: Create Ministores (real books)
+# ----------------------------
+@app.post("/create_ministores", response_model=CreateMinistoresResponse)
+async def create_ministores(req: CreateMinistoresRequest):
+    topics = req.topics or []
+    topics = [t.strip() for t in topics if isinstance(t, str) and t.strip()][:3]
+
+    if len(topics) < 1:
+        raise HTTPException(status_code=400, detail="No topics provided")
+
+    try:
+        book_urls: List[str] = []
+        book_ids: List[int] = []
+
+        for term in topics:
+            book_url, book_id = _create_book_and_resolve_id(term)
+            book_urls.append(book_url)
+            book_ids.append(book_id)
+
+        return CreateMinistoresResponse(book_urls=book_urls, book_ids=book_ids)
 
     except HTTPException:
         raise

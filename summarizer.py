@@ -1,7 +1,7 @@
 # summarizer.py
 import os
 import re
-from typing import Optional, List
+from typing import List
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -10,19 +10,13 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
-def summarize_article_overall(
-    article_text: str,
-    model: str = "gpt-4o-mini",
-) -> str:
-    """
-    Short overall summary (Spanish), 2–3 sentences.
-    """
+def summarize_article_overall(article_text: str, model: str = "gpt-4o-mini") -> str:
     if not article_text or not article_text.strip():
         raise ValueError("El texto del artículo está vacío.")
 
-    trimmed_text = article_text.strip()
-    if len(trimmed_text) > 15000:
-        trimmed_text = trimmed_text[:15000]
+    trimmed = article_text.strip()
+    if len(trimmed) > 15000:
+        trimmed = trimmed[:15000]
 
     messages = [
         {
@@ -32,38 +26,28 @@ def summarize_article_overall(
                 "Devuelve SOLO el resumen en español, en 2-3 frases, sin títulos, sin viñetas."
             ),
         },
-        {"role": "user", "content": f"ARTÍCULO:\n{trimmed_text}"},
+        {"role": "user", "content": f"ARTÍCULO:\n{trimmed}"},
     ]
 
-    response = client.chat.completions.create(
+    r = client.chat.completions.create(
         model=model,
         messages=messages,
         temperature=0.2,
     )
 
-    summary = response.choices[0].message.content.strip()
-    if len(summary) > 500:
-        summary = summary[:500].rstrip() + "…"
+    summary = (r.choices[0].message.content or "").strip()
+    if len(summary) > 650:
+        summary = summary[:650].rstrip() + "…"
     return summary
 
 
-def summarize_spanish_article_multi(
-    article_text: str,
-    n: int = 3,
-    model: str = "gpt-4o-mini",
-) -> List[str]:
-    """
-    Extract N commercial/ad-friendly search topics (max 5 words each).
-    Returns exactly N lines.
-    """
+def summarize_spanish_article_multi(article_text: str, n: int = 3, model: str = "gpt-4o-mini") -> List[str]:
     if not article_text or not article_text.strip():
         raise ValueError("El texto del artículo está vacío.")
-    if n < 1:
-        raise ValueError("n must be >= 1")
 
-    trimmed_text = article_text.strip()
-    if len(trimmed_text) > 15000:
-        trimmed_text = trimmed_text[:15000]
+    trimmed = article_text.strip()
+    if len(trimmed) > 15000:
+        trimmed = trimmed[:15000]
 
     messages = [
         {
@@ -71,61 +55,49 @@ def summarize_spanish_article_multi(
             "content": (
                 "Eres un experto en marketing digital especializado en identificar oportunidades "
                 "comerciales y publicitarias en artículos periodísticos.\n\n"
-                f"Devuelve EXACTAMENTE {n} búsquedas comerciales, una por línea, sin numeración ni viñetas.\n"
-                "Cada búsqueda debe tener MÁXIMO 5 palabras.\n"
-                "Deben ser específicas, útiles y distintas entre sí.\n"
-                "Piensa en productos, servicios, lugares o actividades mencionadas en el artículo.\n"
+                f"Tu objetivo es extraer {n} temas comerciales del artículo.\n\n"
+                "FORMATO DE RESPUESTA:\n"
+                f"- Devuelve EXACTAMENTE {n} búsquedas comerciales, una por línea.\n"
+                "- Sin numeración, sin viñetas, sin explicaciones.\n"
+                "- Cada búsqueda debe tener MÁXIMO 6 palabras.\n"
+                "- Deben ser específicas y con intención comercial.\n"
             ),
         },
         {
             "role": "user",
             "content": (
-                f"Devuelve EXACTAMENTE {n} líneas.\n"
-                "Sin explicaciones.\n\n"
+                f"Analiza el siguiente artículo e identifica EXACTAMENTE {n} búsquedas comerciales.\n\n"
                 "ARTÍCULO:\n"
-                f"{trimmed_text}"
+                f"{trimmed}"
             ),
         },
     ]
 
-    response = client.chat.completions.create(
+    r = client.chat.completions.create(
         model=model,
         messages=messages,
         temperature=0.4,
     )
 
-    raw = response.choices[0].message.content.strip()
-    topics = [ln.strip() for ln in raw.split("\n") if ln.strip()]
+    raw = (r.choices[0].message.content or "").strip()
+    lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
 
-    # remove numbering just in case
-    topics = [re.sub(r"^\d+[\.\)]\s*", "", t) for t in topics]
+    # Remove numbering if model adds it
+    lines = [re.sub(r"^\d+[\.\)]\s*", "", ln) for ln in lines]
 
-    # enforce <= 5 words
+    # Enforce max words
     cleaned = []
-    for t in topics:
-        words = t.split()
-        if len(words) > 5:
-            t = " ".join(words[:5])
-        cleaned.append(t)
+    for ln in lines:
+        w = ln.split()
+        if len(w) > 6:
+            ln = " ".join(w[:6])
+        cleaned.append(ln)
 
-    # ensure exactly n
+    # Guarantee exactly n
     if len(cleaned) < n:
-        # pad with last item or generic fallback
-        if cleaned:
-            cleaned += [cleaned[-1]] * (n - len(cleaned))
-        else:
-            cleaned = ["productos relacionados"] * n
+        while len(cleaned) < n:
+            cleaned.append(cleaned[-1] if cleaned else "productos relacionados")
     elif len(cleaned) > n:
         cleaned = cleaned[:n]
 
     return cleaned
-
-
-# Backwards-compatible function name if you still import this elsewhere
-def summarize_spanish_article(
-    article_text: str,
-    model: str = "gpt-4o-mini",
-    max_chars: Optional[int] = 5000,
-) -> List[str]:
-    # Keeps old behavior: exactly 2 topics
-    return summarize_spanish_article_multi(article_text, n=2, model=model)
